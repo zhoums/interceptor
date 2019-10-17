@@ -1,6 +1,6 @@
 {
   "name": "interceptor-css",
-  "version": "1.0.0",
+  "version": "1.0.28",
   "description": "interceptor for CSS",
   "main": "index.js",
   "scripts": {

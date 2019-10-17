@@ -1,6 +1,4 @@
 
-'use strict'
-
 export let router_interceptor={
 	common:{
 		after:function(to,from,NProgress,router){
@@ -11,7 +9,7 @@ export let router_interceptor={
 		}
 	},
 	dev:{
-		before:function(to, from, next, options){
+		before:async function(to, from, next, options){
 			options.NProgress.start(); // 开启Progress
 			if (options.access_token) { // 判断是否有token
 			    //set userInfo
@@ -19,7 +17,7 @@ export let router_interceptor={
 			      let user = options.Base64.decode(options.access_token.split('.')[1]);
 			      user = JSON.parse(user);
 			      options.Cookies.set('oms-userInfo',user);
-			      options.getInfoFromSidm(user.empNbr).then(data=>{
+			      await options.getInfoFromSidm(user.empNbr).then(data=>{
 			        let obj={
 			          employeeNumber:data._id,
 			          givenName:data.name,
@@ -32,7 +30,7 @@ export let router_interceptor={
 			      })
 			    }
 			    if (options.store.getters.menus === undefined) { // 判断当前用户是否已拉取完user_info信息
-			      options.store.dispatch('GetInfo').then(info => { // 拉取user_info
+			      await options.store.dispatch('GetInfo').then(info => { // 拉取user_info
 			        const menus = {};
 			        for (let i = 0; i < info.menus.length; i++) {
 			          menus[info.menus[i].code] = true;
@@ -56,10 +54,8 @@ export let router_interceptor={
 			    } else {
 			      // next('/login'); // 否则全部重定向到登录页
 			      //setTimeout 防止未完全退出就跳转页面
-			      setTimeout(()=>{
-			        location.href=`https://${options.casHost}/cas/login?service=${location.href.split("#")[0]}`;
-			        options.NProgress.done();
-			      },800)
+						location.href=options.casHost+"/cas/login?service="+location.href.split("#")[0];
+						options.NProgress.done();
 
 			       // 在hash模式下 改变手动改变hash 重定向回来 不会触发afterEach 暂时hack方案 ps：history模式下无问题，可删除该行！
 			    }
@@ -68,18 +64,18 @@ export let router_interceptor={
 		}
 	},
 	prod:{
-		before:function(to, from, next, options){
+		before:async function(to, from, next, options){
 			options.NProgress.start(); // 开启Progress
 			  if (options.access_token) { // 判断是否有token
 			    //set userInfo
 			    if(!options.isFullUser){
 			      let user = options.Base64.decode(options.access_token.split('.')[1]);
 			      user = JSON.parse(user);
-			      options.Cookies.set('oms-userInfo', user);
+			      await options.Cookies.set('oms-userInfo', user);
 			      //为localhost开发保存的COOKIE
 			      options.Cookies.set('access_tk_dev',options.access_token, {path:'/',domain:'chowsangsang.com'});
 
-			      options.getInfoFromSidm(user.empNbr).then(data=>{
+			      await options.getInfoFromSidm(user.empNbr).then(data=>{
 			        let obj={
 			          employeeNumber:data._id||'',
 			          givenName:data.name||'',
@@ -106,9 +102,9 @@ export let router_interceptor={
 			            })
 
 			          });
-			        location.href='/static/401.html'
+			        location.href='/static/401.html?u='+options.casHost
 			      }
-			      options.store.dispatch('GetInfo').then(info => { // 拉取user_info
+			      await options.store.dispatch('GetInfo').then(info => { // 拉取user_info
 			        options.promissToVisit=true;
 			        const menus = {};
 			        for (let i = 0; i < info.menus.length; i++) {
@@ -135,42 +131,72 @@ export let router_interceptor={
 			      // next('/login'); // 否则全部重定向到登录页
 			      //setTimeout 防止未完全退出就跳转页面
 			      setTimeout(()=>{
-			        location.href=`https://${options.casHost}/cas/login?service=${location.href.split("#")[0]}`;
+			        location.href=options.casHost+'/cas/login?service='+location.href.split("#")[0];
 			        options.NProgress.done();
 			      },800)
 			       // 在hash模式下 改变手动改变hash 重定向回来 不会触发afterEach 暂时hack方案 ps：history模式下无问题，可删除该行！
 			    }
 			  }
-		}	
+		}
 	}
 }
 
 export let fetch_interceptor={
 	request:function(config,system,Cookies,getAccessToken,process){
 		let _con = Object.assign({},config)
+		const userId = JSON.parse(Cookies.get("oms-userInfo")).empNbr
 		// Do something before request is sent
 		_con.headers['system'] = system;
 		_con.headers['Authorization'] = getAccessToken();// 让每个请求携带token--['X-Token']为自定义key 请根据实际情况自行修改
+		_con.headers['emploee'] = userId;
 		if(process.env.NODE_ENV==='development'){
 		  _con.headers['environment'] = 'development';
-		  _con.headers['userId'] = JSON.parse(Cookies.get("oms-userInfo")).empNbr;
+		  _con.headers['userId'] = userId;
 		}
 		return _con;
 	},
 	response:{
 		res:function(response,Message){
 			const res = response.data;
-		    if (response.status !== 200 && res.status !== 200) {
-		      Message({
-		        message: res.message,
-		        type: 'error',
-		        duration: 5 * 1000
-		      });
-		      return null
-		    } else {
-		      return response.data;
-		    }
+				if(response.status==403||response.status==401){
+					//如果是登录超时刷新时，loginTimeout为true,不去401只提示超时
+					console.log(error,'当前用户无相关操作权限')
+					if(!store.getters.loginTimeout){
+						store.dispatch('delDomaCookie')
+						 store.dispatch('FedLogOut')
+							 .then(() => {
+								 Cookies.remove('access_tk_dev', {
+									 path: '/',
+									 domain: 'chowsangsang.com'
+								 })
+							 });
+						 location.href='/static/401.html?u='+casHost;
+					}
+				}else{
+					return response.data;
+				}
 		},
-		
-	}
+		error:function(error,store,MessageBox,Message,Cookies,casHost){
+			//应后端要求写死 ；loginTimeout,401防止部分系统没把401改508
+			    if (error == 'Error: Request failed with status code 508') {
+			      if(store.getters.loginTimeout){
+			        return;//第一次508才提示
+			      }
+			      store.dispatch('setLoginTimeout',true);
+
+			      MessageBox({
+			        message:'你已被登出，点击确定重新登录。',
+			        type: 'warning'
+			      }).then(() => {
+			        location.href=casHost+'/cas/login?service='+location.href
+			      })
+			    }else{
+			      Message({
+			        message: error.message,
+			        type: 'error',
+			        duration: 5 * 1000
+			      });
+			    }
+		}
+	},
 };
